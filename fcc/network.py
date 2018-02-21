@@ -1,6 +1,33 @@
 import torch
 import torch.nn as nn
 
+    
+class FCC(nn.Module):
+    def __init__(self):
+        super(FCC, self).__init__()
+        
+        layers = [self.BN0 = nn.BatchNorm1d(28*28),
+                  self.hidden0 = nn.Linear(28*28, 1024),
+                  nn.ReLU(inplace = True)]
+        
+        for _ in range(6):
+            layers += [self.BN0 = nn.BatchNorm1d(1024),
+                       self.hidden0 = nn.Linear(1024, 1024),
+                       nn.ReLU(inplace = True)]
+
+        layers += [self.BN0 = nn.BatchNorm1d(1024),
+                   self.hidden0 = nn.Linear(1024, 10)]
+        
+        self.fcc = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        R, C, H, W = x.size()
+        x = x.resize(R, C*H*W)
+        
+        x = self.fcc(x)
+        return x
+
+    
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()

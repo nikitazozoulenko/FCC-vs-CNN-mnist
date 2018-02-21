@@ -7,6 +7,7 @@ from torchvision import datasets, transforms
 
 from network import CNN
 from utils import graph, losses_to_ewma
+from data_feeder import DataFeeder
 
 class ModelStruct(object):
     def __init__(self, model, lr):
@@ -37,79 +38,71 @@ def make_batch(batch_size, i, data, use_cuda = True):
     return Variable(images_tensor), Variable(labels_tensor)
 
 
-def evaluate_acc(cnn, mnist_val, i, batch_size, use_cuda = True):
+def evaluate_acc(cnn, mnist_test, i):
     print(i)
     
     cnn.model.eval()
 
-    cnn_correct = 0
+    images, labels = mnist_test
+    out = cnn.model(images)
+    _, index = out.topk(1, dim=1)
+    correct = torch.mean((index.squeeze() == labels).float())
 
-    for j in range(len(mnist_val)//batch_size):
-        images, labels = make_batch(batch_size, j, mnist_val, use_cuda)
-        cnn_correct += eval_single(cnn, images, labels) / len(mnist_val)
-
-    cnn.acc += [cnn_correct.data.cpu().numpy()[0]]
+    cnn.acc += [correct.data.cpu().numpy()[0]]
     cnn.acc_indices += [i]
 
+    loss = F.cross_entropy(out, labels)
+    cnn.val_losses += [loss.data.cpu().numpy()[0]]
+    cnn.val_x_indices += [i]
+
+
     cnn.model.train()
-
+    
         
-def eval_single(model_info, images, labels):
-    out = model_info.model(images)
-    _, index = out.topk(1, dim=1)
-    correct = torch.sum(index.squeeze() == labels).float()
-    return correct
-
-        
-def train(model_info, images, labels, val_images, val_labels, i, batch_size):
+def train(model_info, images, labels, i):
     model_info.optim.zero_grad()
     pred = model_info.model(images)
     loss = F.cross_entropy(pred, labels)
     loss.backward()
     model_info.optim.step()
-    
-    val_pred = model_info.model(val_images)
-    val_loss = F.cross_entropy(val_pred, val_labels)
 
     model_info.losses += [loss.data.cpu().numpy()[0]]
     model_info.x_indices += [i]
-    model_info.val_losses += [val_loss.data.cpu().numpy()[0]]
-    model_info.val_x_indices += [i]
 
     
 def main():
-    to_PIL = transforms.ToPILImage()
+    batch_size = 100
     mnist_train = datasets.MNIST("/hdd/Data/MNIST/", train=True, transform=transforms.ToTensor(), download=True)
-    mnist_val = datasets.MNIST("/hdd/Data/MNIST/", train=False, transform=transforms.ToTensor(), download=True)
-
+    mnist_test = datasets.MNIST("/hdd/Data/MNIST/", train=False, transform=transforms.ToTensor(), download=True)
+    data_feeder = DataFeeder(mnist_train, preprocess_workers = 1, cuda_workers = 1, cpu_size = 12,
+                 cuda_size = 3, batch_size = batch_size, use_cuda = True, volatile = False)
+    data_feeder.start_queue_threads()
     cnn = ModelStruct(CNN().cuda(), 0.001)
+
+    test_data = make_batch(len(mnist_test), 0, mnist_test, use_cuda = True)
 
     #300k
     #175k
-    batch_size = 100
-    for i in range(30001):
-        images, labels = make_batch(batch_size, i, mnist_train, use_cuda = True)
-        val_images, val_labels = make_batch(batch_size, i, mnist_val, use_cuda = True)
-        train(cnn, images, labels, val_images, val_labels, i, batch_size)
+    for i in range(100001):
+        images, labels = data_feeder.get_batch()
+        train(cnn, images, labels, i)
         if i % 100 == 0:
-            evaluate_acc(cnn, mnist_val, i, batch_size, use_cuda = True)
-    # decrease learning rate
-    if i in [15000]:
-        cnn.lr = cnn.lr/10
-        print("updated learning rate: current lr:", cnn.lr)
-        for param_group in cnn.optim.param_groups:
-            param_group['lr'] = learning_rate
-    if i % 100000000000000 == 0 and i != 0:
-        torch.save(model, "savedir/model"+"it"+str(i//1000)+"k.pt")
+            evaluate_acc(cnn, test_data, i)
+        # decrease learning rate
+        if i in [300000]:
+            cnn.lr = cnn.lr/10
+            print("updated learning rate: current lr:", cnn.lr)
+            for param_group in cnn.optim.param_groups:
+                param_group['lr'] = cnn.lr
+        if i % 100000 == 0:
+            torch.save(cnn.model, "savedir/model_it"+str(i//1000)+"k.pt")
             
-
     print(max(cnn.acc))
+    print(cnn.acc)
     graph(cnn)
-
     cnn.losses = losses_to_ewma(cnn.losses)
     cnn.val_losses = losses_to_ewma(cnn.val_losses)
     cnn.acc = losses_to_ewma(cnn.acc)
-
     graph(cnn)
 
     
